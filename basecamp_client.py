@@ -105,8 +105,13 @@ class BasecampClient:
         status="archived" or status="trashed" to fetch other lifecycle
         buckets. Honours a single Retry-After on a 429.
         """
+        # Basecamp returns active projects when status is omitted and 400s on
+        # status=active, so only forward the param for non-default lifecycles.
+        params = {"per_page": per_page}
+        if status and status != "active":
+            params["status"] = status
+
         projects = []
-        params = {"per_page": per_page, "status": status}
         url = f"{self.base_url}/projects.json"
         retried_429 = False
 
@@ -130,7 +135,8 @@ class BasecampClient:
 
             if response.status_code != 200:
                 raise Exception(
-                    f"Failed to get projects: {response.status_code} - {response.text}"
+                    f"Failed to get projects: {response.status_code} - "
+                    f"{response.text} (url={response.url})"
                 )
 
             retried_429 = False  # reset after a successful page
@@ -139,8 +145,8 @@ class BasecampClient:
             next_link = response.links.get("next")
             if not next_link or not next_link.get("url"):
                 break
-            # Subsequent pages: use the full URL from the Link header and stop
-            # re-sending query params (the URL already encodes page/per_page/status).
+            # Subsequent pages: use the full URL from the Link header verbatim
+            # and stop re-sending query params (the URL already encodes them).
             url = next_link["url"]
             params = None
 

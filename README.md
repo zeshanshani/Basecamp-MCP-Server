@@ -2,10 +2,19 @@
 
 This project provides a **FastMCP-powered** integration for Basecamp 3, allowing AI clients to interact with Basecamp directly through the MCP protocol.
 
-✅ **Migration Complete:** Successfully migrated to official Anthropic FastMCP framework with **100% feature parity** (all 75 tools)
-🚀 **Ready for Production:** Full protocol compliance with MCP 2025-06-18
+## Deployment: Railway (HTTP transport)
 
-## Quick Setup
+This fork is configured to run as an HTTP-transport MCP server on Railway, so it can be added as a custom connector in Claude.ai (web, desktop, mobile) rather than running locally over stdio.
+
+- Entry point: `railway_app.py` (mounts the Flask OAuth app at `/` and the FastMCP Streamable HTTP transport at `/mcp`).
+- Process declaration: `Procfile`.
+- Python version: `runtime.txt` (3.12.7).
+- Persistent OAuth tokens: set `BASECAMP_MCP_TOKEN_FILE=/data/oauth_tokens.json` and mount a Railway volume at `/data`.
+- `/mcp` requires `Authorization: Bearer $MCP_API_KEY`.
+
+The stdio instructions below are the upstream workflow and are kept for reference. The stdio config generators (`generate_*_config.py`) and `setup.py` have been removed in this fork.
+
+## Quick Setup (upstream stdio workflow)
 
 This server works with **Cursor**, **Codex**, and **Claude Desktop**. Choose your preferred client:
 

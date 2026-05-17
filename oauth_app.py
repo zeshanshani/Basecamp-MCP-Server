@@ -11,9 +11,10 @@ This application provides endpoints for:
 import os
 import sys
 import json
+import hmac
 import secrets
 import logging
-from flask import Flask, request, redirect, url_for, session, render_template_string, jsonify
+from flask import Flask, request, redirect, url_for, session, render_template_string, jsonify, abort
 from dotenv import load_dotenv
 from basecamp_oauth import BasecampOAuth
 from basecamp_client import BasecampClient
@@ -35,7 +36,14 @@ logger = logging.getLogger(__name__)
 load_dotenv()
 
 # Check for required environment variables
-required_vars = ['BASECAMP_CLIENT_ID', 'BASECAMP_CLIENT_SECRET', 'BASECAMP_REDIRECT_URI', 'USER_AGENT']
+required_vars = [
+    'BASECAMP_CLIENT_ID',
+    'BASECAMP_CLIENT_SECRET',
+    'BASECAMP_REDIRECT_URI',
+    'USER_AGENT',
+    'FLASK_SECRET_KEY',
+    'MCP_API_KEY',
+]
 missing_vars = [var for var in required_vars if not os.getenv(var)]
 if missing_vars:
     logger.error(f"Missing required environment variables: {', '.join(missing_vars)}")
@@ -44,7 +52,12 @@ if missing_vars:
 
 # Create Flask app
 app = Flask(__name__)
-app.secret_key = os.getenv('FLASK_SECRET_KEY', secrets.token_hex(16))
+app.secret_key = os.environ['FLASK_SECRET_KEY']
+app.config.update(
+    SESSION_COOKIE_SECURE=True,
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE='Lax',
+)
 
 # HTML template for displaying results
 RESULTS_TEMPLATE = """
@@ -219,7 +232,9 @@ def home():
         # No valid token, show login button
         try:
             oauth_client = get_oauth_client()
-            auth_url = oauth_client.get_authorization_url()
+            state = secrets.token_urlsafe(32)
+            session['oauth_state'] = state
+            auth_url = oauth_client.get_authorization_url(state=state)
 
             logger.info("Home page: User not authenticated, showing login button")
 
@@ -240,10 +255,11 @@ def home():
 @app.route('/auth/callback')
 def auth_callback():
     """Handle the OAuth callback from Basecamp."""
-    logger.info("OAuth callback called with args: %s", request.args)
+    logger.info("OAuth callback called (keys=%s)", sorted(request.args.keys()))
 
     code = request.args.get('code')
     error = request.args.get('error')
+    received_state = request.args.get('state')
 
     if error:
         logger.error("OAuth callback error: %s", error)
@@ -260,6 +276,19 @@ def auth_callback():
             RESULTS_TEMPLATE,
             title="Error",
             message="No authorization code received.",
+            show_home=True
+        )
+
+    # CSRF: confirm the state parameter matches the one we generated in /.
+    expected_state = session.pop('oauth_state', None)
+    if not expected_state or not received_state or not hmac.compare_digest(
+        expected_state, received_state
+    ):
+        logger.error("OAuth callback: state mismatch (possible CSRF)")
+        return render_template_string(
+            RESULTS_TEMPLATE,
+            title="Authentication Error",
+            message="OAuth state mismatch. Please start the login again.",
             show_home=True
         )
 
@@ -295,7 +324,10 @@ def auth_callback():
             try:
                 logger.info("Getting user identity to find account_id")
                 identity = oauth_client.get_identity(access_token)
-                logger.info("Identity response: %s", identity)
+                logger.info(
+                    "Identity response received (accounts=%d)",
+                    len(identity.get('accounts', []) or []),
+                )
 
                 # Find Basecamp 3 account
                 if identity.get('accounts'):
@@ -325,13 +357,6 @@ def auth_callback():
                 show_home=True
             )
 
-        # Also keep the access token in session for convenience
-        session['access_token'] = access_token
-        if refresh_token:
-            session['refresh_token'] = refresh_token
-        if account_id:
-            session['account_id'] = account_id
-
         logger.info("OAuth flow completed successfully")
 
         return redirect(url_for('home'))
@@ -356,10 +381,10 @@ def get_token_api():
         bool(request.headers.get('X-API-Key')),
     )
 
-    # In production, implement proper authentication for this endpoint
-    # For now, we'll use a simple API key check
-    api_key = request.headers.get('X-API-Key')
-    if not api_key or api_key != os.getenv('MCP_API_KEY', 'mcp_secret_key'):
+    # MCP_API_KEY is required at startup, so this is always set.
+    api_key = request.headers.get('X-API-Key') or ''
+    expected = os.environ['MCP_API_KEY']
+    if not hmac.compare_digest(api_key, expected):
         logger.error("Token API: Invalid API key")
         return jsonify({
             "error": "Unauthorized",

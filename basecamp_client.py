@@ -1,5 +1,6 @@
 import os
 import re
+import time
 
 import requests
 from dotenv import load_dotenv
@@ -97,13 +98,53 @@ class BasecampClient:
         return requests.patch(url, auth=self.auth, headers=self.headers, json=data)
 
     # Project methods
-    def get_projects(self):
-        """Get all projects."""
-        response = self.get('projects.json')
-        if response.status_code == 200:
-            return response.json()
-        else:
-            raise Exception(f"Failed to get projects: {response.status_code} - {response.text}")
+    def get_projects(self, status="active", per_page=100):
+        """
+        Get all projects, paginating until the API stops returning a
+        Link: ...; rel="next" header. Defaults to active projects; pass
+        status="archived" or status="trashed" to fetch other lifecycle
+        buckets. Honours a single Retry-After on a 429.
+        """
+        projects = []
+        params = {"per_page": per_page, "status": status}
+        url = f"{self.base_url}/projects.json"
+        retried_429 = False
+
+        while url is not None:
+            response = requests.get(
+                url,
+                auth=self.auth,
+                headers=self.headers,
+                params=params,
+            )
+
+            if response.status_code == 429 and not retried_429:
+                retry_after = response.headers.get("Retry-After", "1")
+                try:
+                    delay = max(0.0, float(retry_after))
+                except ValueError:
+                    delay = 1.0
+                time.sleep(min(delay, 60.0))
+                retried_429 = True
+                continue
+
+            if response.status_code != 200:
+                raise Exception(
+                    f"Failed to get projects: {response.status_code} - {response.text}"
+                )
+
+            retried_429 = False  # reset after a successful page
+            projects.extend(response.json())
+
+            next_link = response.links.get("next")
+            if not next_link or not next_link.get("url"):
+                break
+            # Subsequent pages: use the full URL from the Link header and stop
+            # re-sending query params (the URL already encodes page/per_page/status).
+            url = next_link["url"]
+            params = None
+
+        return projects
 
     def get_project(self, project_id):
         """Get a specific project by ID."""

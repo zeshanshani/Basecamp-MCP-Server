@@ -132,19 +132,36 @@ async def _run_sync(func, *args, **kwargs):
 
 # Core MCP Tools - Starting with essential ones from original server
 
+_PROJECT_STATUSES = ("active", "archived", "trashed")
+
+
 @mcp.tool()
-async def get_projects() -> Dict[str, Any]:
-    """Get all Basecamp projects."""
+async def get_projects(status: str = "active") -> Dict[str, Any]:
+    """
+    Get all Basecamp projects, paginating through every page of results.
+
+    Args:
+        status: Lifecycle filter forwarded to Basecamp. One of "active"
+            (default), "archived", or "trashed".
+    """
+    if status not in _PROJECT_STATUSES:
+        return {
+            "error": "Invalid argument",
+            "message": (
+                f"status must be one of {_PROJECT_STATUSES}, got {status!r}."
+            ),
+        }
+
     client = _get_basecamp_client()
     if not client:
         return _get_auth_error_response()
-    
+
     try:
-        projects = await _run_sync(client.get_projects)
+        projects = await _run_sync(client.get_projects, status)
         return {
             "status": "success",
             "projects": projects,
-            "count": len(projects)
+            "count": len(projects),
         }
     except Exception as e:
         logger.error(f"Error getting projects: {e}")

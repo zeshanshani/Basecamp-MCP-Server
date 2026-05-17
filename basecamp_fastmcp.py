@@ -20,11 +20,34 @@ from search_utils import BasecampSearch
 import token_storage
 import auth_manager
 from dotenv import load_dotenv
+from urllib.parse import urlparse
 
 # Determine project root (directory containing this script)
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 DOTENV_PATH = os.path.join(PROJECT_ROOT, '.env')
 load_dotenv(DOTENV_PATH)
+
+# URL the user is told to visit when re-authentication is needed. Derived from
+# BASECAMP_REDIRECT_URI so the same env var configures the OAuth callback and
+# the user-facing auth page. Falls back to localhost for stdio/dev use.
+_re_auth_parsed = urlparse(os.environ.get('BASECAMP_REDIRECT_URI', ''))
+OAUTH_UI_URL = (
+    f"{_re_auth_parsed.scheme}://{_re_auth_parsed.netloc}"
+    if _re_auth_parsed.scheme and _re_auth_parsed.netloc
+    else 'http://localhost:8000'
+)
+TOKEN_EXPIRED_NEED_REAUTH = (
+    f"Your Basecamp OAuth token has expired. Please re-authenticate by "
+    f"visiting {OAUTH_UI_URL} and completing the OAuth flow again."
+)
+TOKEN_EXPIRED_MID_CALL = (
+    f"Your Basecamp OAuth token expired during the API call. Please "
+    f"re-authenticate by visiting {OAUTH_UI_URL} and completing the OAuth "
+    f"flow again."
+)
+NO_TOKEN_NEED_AUTH = (
+    f"Please authenticate with Basecamp first. Visit {OAUTH_UI_URL} to log in."
+)
 
 # Set up logging to file AND stderr (following MCP best practices)
 LOG_FILE_PATH = os.path.join(PROJECT_ROOT, 'basecamp_fastmcp.log')
@@ -95,12 +118,12 @@ def _get_auth_error_response() -> Dict[str, Any]:
     if token_storage.is_token_expired():
         return {
             "error": "OAuth token expired",
-            "message": "Your Basecamp OAuth token has expired. Please re-authenticate by visiting http://localhost:8000 and completing the OAuth flow again."
+            "message": TOKEN_EXPIRED_NEED_REAUTH
         }
     else:
         return {
             "error": "Authentication required", 
-            "message": "Please authenticate with Basecamp first. Visit http://localhost:8000 to log in."
+            "message": NO_TOKEN_NEED_AUTH
         }
 
 async def _run_sync(func, *args, **kwargs):
@@ -128,7 +151,7 @@ async def get_projects() -> Dict[str, Any]:
         if "401" in str(e) and "expired" in str(e).lower():
             return {
                 "error": "OAuth token expired",
-                "message": "Your Basecamp OAuth token expired during the API call. Please re-authenticate by visiting http://localhost:8000 and completing the OAuth flow again."
+                "message": TOKEN_EXPIRED_MID_CALL
             }
         return {
             "error": "Execution error",
@@ -157,7 +180,7 @@ async def get_project(project_id: str) -> Dict[str, Any]:
         if "401" in str(e) and "expired" in str(e).lower():
             return {
                 "error": "OAuth token expired",
-                "message": "Your Basecamp OAuth token expired during the API call. Please re-authenticate by visiting http://localhost:8000 and completing the OAuth flow again."
+                "message": TOKEN_EXPIRED_MID_CALL
             }
         return {
             "error": "Execution error",
@@ -200,7 +223,7 @@ async def search_basecamp(query: str, project_id: Optional[str] = None) -> Dict[
         if "401" in str(e) and "expired" in str(e).lower():
             return {
                 "error": "OAuth token expired",
-                "message": "Your Basecamp OAuth token expired during the API call. Please re-authenticate by visiting http://localhost:8000 and completing the OAuth flow again."
+                "message": TOKEN_EXPIRED_MID_CALL
             }
         return {
             "error": "Execution error",
@@ -230,7 +253,7 @@ async def get_todolists(project_id: str) -> Dict[str, Any]:
         if "401" in str(e) and "expired" in str(e).lower():
             return {
                 "error": "OAuth token expired",
-                "message": "Your Basecamp OAuth token expired during the API call. Please re-authenticate by visiting http://localhost:8000 and completing the OAuth flow again."
+                "message": TOKEN_EXPIRED_MID_CALL
             }
         return {
             "error": "Execution error",
@@ -261,7 +284,7 @@ async def get_todos(project_id: str, todolist_id: str) -> Dict[str, Any]:
         if "401" in str(e) and "expired" in str(e).lower():
             return {
                 "error": "OAuth token expired",
-                "message": "Your Basecamp OAuth token expired during the API call. Please re-authenticate by visiting http://localhost:8000 and completing the OAuth flow again."
+                "message": TOKEN_EXPIRED_MID_CALL
             }
         return {
             "error": "Execution error",
@@ -291,7 +314,7 @@ async def get_todo(project_id: str, todo_id: str) -> Dict[str, Any]:
         if "401" in str(e) and "expired" in str(e).lower():
             return {
                 "error": "OAuth token expired",
-                "message": "Your Basecamp OAuth token expired during the API call. Please re-authenticate by visiting http://localhost:8000 and completing the OAuth flow again."
+                "message": TOKEN_EXPIRED_MID_CALL
             }
         return {
             "error": "Execution error",
@@ -346,7 +369,7 @@ async def create_todo(project_id: str, todolist_id: str, content: str,
         if "401" in str(e) and "expired" in str(e).lower():
             return {
                 "error": "OAuth token expired",
-                "message": "Your Basecamp OAuth token expired during the API call. Please re-authenticate by visiting http://localhost:8000 and completing the OAuth flow again."
+                "message": TOKEN_EXPIRED_MID_CALL
             }
         return {
             "error": "Execution error",
@@ -410,7 +433,7 @@ async def update_todo(project_id: str, todo_id: str,
         if "401" in str(e) and "expired" in str(e).lower():
             return {
                 "error": "OAuth token expired",
-                "message": "Your Basecamp OAuth token expired during the API call. Please re-authenticate by visiting http://localhost:8000 and completing the OAuth flow again."
+                "message": TOKEN_EXPIRED_MID_CALL
             }
         return {
             "error": "Execution error",
@@ -442,7 +465,7 @@ async def delete_todo(project_id: str, todo_id: str) -> Dict[str, Any]:
         if "401" in str(e) and "expired" in str(e).lower():
             return {
                 "error": "OAuth token expired",
-                "message": "Your Basecamp OAuth token expired during the API call. Please re-authenticate by visiting http://localhost:8000 and completing the OAuth flow again."
+                "message": TOKEN_EXPIRED_MID_CALL
             }
         return {
             "error": "Execution error",
@@ -473,7 +496,7 @@ async def complete_todo(project_id: str, todo_id: str) -> Dict[str, Any]:
         if "401" in str(e) and "expired" in str(e).lower():
             return {
                 "error": "OAuth token expired",
-                "message": "Your Basecamp OAuth token expired during the API call. Please re-authenticate by visiting http://localhost:8000 and completing the OAuth flow again."
+                "message": TOKEN_EXPIRED_MID_CALL
             }
         return {
             "error": "Execution error",
@@ -503,7 +526,7 @@ async def uncomplete_todo(project_id: str, todo_id: str) -> Dict[str, Any]:
         if "401" in str(e) and "expired" in str(e).lower():
             return {
                 "error": "OAuth token expired",
-                "message": "Your Basecamp OAuth token expired during the API call. Please re-authenticate by visiting http://localhost:8000 and completing the OAuth flow again."
+                "message": TOKEN_EXPIRED_MID_CALL
             }
         return {
             "error": "Execution error",
@@ -531,7 +554,7 @@ async def archive_todo(project_id: str, todo_id: str) -> Dict[str, Any]:
     except Exception as e:
         logger.error(f"Error archiving todo {todo_id}: {e}")
         if "401" in str(e) and "expired" in str(e).lower():
-            return {"error": "OAuth token expired", "message": "Your Basecamp OAuth token expired during the API call. Please re-authenticate by visiting http://localhost:8000 and completing the OAuth flow again."}
+            return {"error": "OAuth token expired", "message": TOKEN_EXPIRED_MID_CALL}
         return {"error": "Execution error", "message": str(e)}
 
 
@@ -566,7 +589,7 @@ async def reposition_todo(
     except Exception as e:
         logger.error(f"Error repositioning todo {todo_id}: {e}")
         if "401" in str(e) and "expired" in str(e).lower():
-            return {"error": "OAuth token expired", "message": "Your Basecamp OAuth token expired during the API call. Please re-authenticate by visiting http://localhost:8000 and completing the OAuth flow again."}
+            return {"error": "OAuth token expired", "message": TOKEN_EXPIRED_MID_CALL}
         return {"error": "Execution error", "message": str(e)}
 
 
@@ -594,7 +617,7 @@ async def global_search(query: str) -> Dict[str, Any]:
         if "401" in str(e) and "expired" in str(e).lower():
             return {
                 "error": "OAuth token expired",
-                "message": "Your Basecamp OAuth token expired during the API call. Please re-authenticate by visiting http://localhost:8000 and completing the OAuth flow again."
+                "message": TOKEN_EXPIRED_MID_CALL
             }
         return {
             "error": "Execution error",
@@ -630,7 +653,7 @@ async def get_comments(recording_id: str, project_id: str, page: int = 1) -> Dic
         if "401" in str(e) and "expired" in str(e).lower():
             return {
                 "error": "OAuth token expired",
-                "message": "Your Basecamp OAuth token expired during the API call. Please re-authenticate by visiting http://localhost:8000 and completing the OAuth flow again."
+                "message": TOKEN_EXPIRED_MID_CALL
             }
         return {
             "error": "Execution error",
@@ -662,7 +685,7 @@ async def create_comment(recording_id: str, project_id: str, content: str) -> Di
         if "401" in str(e) and "expired" in str(e).lower():
             return {
                 "error": "OAuth token expired",
-                "message": "Your Basecamp OAuth token expired during the API call. Please re-authenticate by visiting http://localhost:8000 and completing the OAuth flow again.",
+                "message": TOKEN_EXPIRED_MID_CALL,
             }
         return {
             "error": "Execution error",
@@ -693,7 +716,7 @@ async def get_campfire_lines(project_id: str, campfire_id: str) -> Dict[str, Any
         if "401" in str(e) and "expired" in str(e).lower():
             return {
                 "error": "OAuth token expired",
-                "message": "Your Basecamp OAuth token expired during the API call. Please re-authenticate by visiting http://localhost:8000 and completing the OAuth flow again."
+                "message": TOKEN_EXPIRED_MID_CALL
             }
         return {
             "error": "Execution error",
@@ -722,7 +745,7 @@ async def get_message_board(project_id: str) -> Dict[str, Any]:
         if "401" in str(e) and "expired" in str(e).lower():
             return {
                 "error": "OAuth token expired",
-                "message": "Your Basecamp OAuth token expired during the API call. Please re-authenticate by visiting http://localhost:8000 and completing the OAuth flow again."
+                "message": TOKEN_EXPIRED_MID_CALL
             }
         return {
             "error": "Execution error",
@@ -753,7 +776,7 @@ async def get_messages(project_id: str, message_board_id: Optional[str] = None) 
         if "401" in str(e) and "expired" in str(e).lower():
             return {
                 "error": "OAuth token expired",
-                "message": "Your Basecamp OAuth token expired during the API call. Please re-authenticate by visiting http://localhost:8000 and completing the OAuth flow again."
+                "message": TOKEN_EXPIRED_MID_CALL
             }
         return {
             "error": "Execution error",
@@ -783,7 +806,7 @@ async def get_message(project_id: str, message_id: str) -> Dict[str, Any]:
         if "401" in str(e) and "expired" in str(e).lower():
             return {
                 "error": "OAuth token expired",
-                "message": "Your Basecamp OAuth token expired during the API call. Please re-authenticate by visiting http://localhost:8000 and completing the OAuth flow again."
+                "message": TOKEN_EXPIRED_MID_CALL
             }
         return {
             "error": "Execution error",
@@ -814,7 +837,7 @@ async def get_message_categories(project_id: str) -> Dict[str, Any]:
         if "401" in str(e) and "expired" in str(e).lower():
             return {
                 "error": "OAuth token expired",
-                "message": "Your Basecamp OAuth token expired during the API call. Please re-authenticate by visiting http://localhost:8000 and completing the OAuth flow again."
+                "message": TOKEN_EXPIRED_MID_CALL
             }
         return {
             "error": "Execution error",
@@ -857,7 +880,7 @@ async def create_message(project_id: str, subject: str, content: str,
         if "401" in str(e) and "expired" in str(e).lower():
             return {
                 "error": "OAuth token expired",
-                "message": "Your Basecamp OAuth token expired during the API call. Please re-authenticate by visiting http://localhost:8000 and completing the OAuth flow again."
+                "message": TOKEN_EXPIRED_MID_CALL
             }
         return {
             "error": "Execution error",
@@ -888,7 +911,7 @@ async def get_inbox(project_id: str) -> Dict[str, Any]:
         if "401" in str(e) and "expired" in str(e).lower():
             return {
                 "error": "OAuth token expired",
-                "message": "Your Basecamp OAuth token expired during the API call. Please re-authenticate by visiting http://localhost:8000 and completing the OAuth flow again."
+                "message": TOKEN_EXPIRED_MID_CALL
             }
         return {
             "error": "Execution error",
@@ -920,7 +943,7 @@ async def get_forwards(project_id: str, inbox_id: Optional[str] = None) -> Dict[
         if "401" in str(e) and "expired" in str(e).lower():
             return {
                 "error": "OAuth token expired",
-                "message": "Your Basecamp OAuth token expired during the API call. Please re-authenticate by visiting http://localhost:8000 and completing the OAuth flow again."
+                "message": TOKEN_EXPIRED_MID_CALL
             }
         return {
             "error": "Execution error",
@@ -951,7 +974,7 @@ async def get_forward(project_id: str, forward_id: str) -> Dict[str, Any]:
         if "401" in str(e) and "expired" in str(e).lower():
             return {
                 "error": "OAuth token expired",
-                "message": "Your Basecamp OAuth token expired during the API call. Please re-authenticate by visiting http://localhost:8000 and completing the OAuth flow again."
+                "message": TOKEN_EXPIRED_MID_CALL
             }
         return {
             "error": "Execution error",
@@ -983,7 +1006,7 @@ async def get_inbox_replies(project_id: str, forward_id: str) -> Dict[str, Any]:
         if "401" in str(e) and "expired" in str(e).lower():
             return {
                 "error": "OAuth token expired",
-                "message": "Your Basecamp OAuth token expired during the API call. Please re-authenticate by visiting http://localhost:8000 and completing the OAuth flow again."
+                "message": TOKEN_EXPIRED_MID_CALL
             }
         return {
             "error": "Execution error",
@@ -1015,7 +1038,7 @@ async def get_inbox_reply(project_id: str, forward_id: str, reply_id: str) -> Di
         if "401" in str(e) and "expired" in str(e).lower():
             return {
                 "error": "OAuth token expired",
-                "message": "Your Basecamp OAuth token expired during the API call. Please re-authenticate by visiting http://localhost:8000 and completing the OAuth flow again."
+                "message": TOKEN_EXPIRED_MID_CALL
             }
         return {
             "error": "Execution error",
@@ -1046,7 +1069,7 @@ async def trash_forward(project_id: str, forward_id: str) -> Dict[str, Any]:
         if "401" in str(e) and "expired" in str(e).lower():
             return {
                 "error": "OAuth token expired",
-                "message": "Your Basecamp OAuth token expired during the API call. Please re-authenticate by visiting http://localhost:8000 and completing the OAuth flow again."
+                "message": TOKEN_EXPIRED_MID_CALL
             }
         return {
             "error": "Execution error",
@@ -1077,7 +1100,7 @@ async def get_card_tables(project_id: str) -> Dict[str, Any]:
         if "401" in str(e) and "expired" in str(e).lower():
             return {
                 "error": "OAuth token expired",
-                "message": "Your Basecamp OAuth token expired during the API call. Please re-authenticate by visiting http://localhost:8000 and completing the OAuth flow again."
+                "message": TOKEN_EXPIRED_MID_CALL
             }
         return {
             "error": "Execution error",
@@ -1108,7 +1131,7 @@ async def get_card_table(project_id: str) -> Dict[str, Any]:
         if "401" in str(e) and "expired" in str(e).lower():
             return {
                 "error": "OAuth token expired",
-                "message": "Your Basecamp OAuth token expired during the API call. Please re-authenticate by visiting http://localhost:8000 and completing the OAuth flow again."
+                "message": TOKEN_EXPIRED_MID_CALL
             }
         return {
             "status": "error",
@@ -1140,7 +1163,7 @@ async def get_columns(project_id: str, card_table_id: str) -> Dict[str, Any]:
         if "401" in str(e) and "expired" in str(e).lower():
             return {
                 "error": "OAuth token expired",
-                "message": "Your Basecamp OAuth token expired during the API call. Please re-authenticate by visiting http://localhost:8000 and completing the OAuth flow again."
+                "message": TOKEN_EXPIRED_MID_CALL
             }
         return {
             "error": "Execution error",
@@ -1171,7 +1194,7 @@ async def get_cards(project_id: str, column_id: str) -> Dict[str, Any]:
         if "401" in str(e) and "expired" in str(e).lower():
             return {
                 "error": "OAuth token expired",
-                "message": "Your Basecamp OAuth token expired during the API call. Please re-authenticate by visiting http://localhost:8000 and completing the OAuth flow again."
+                "message": TOKEN_EXPIRED_MID_CALL
             }
         return {
             "error": "Execution error",
@@ -1206,7 +1229,7 @@ async def create_card(project_id: str, column_id: str, title: str, content: Opti
         if "401" in str(e) and "expired" in str(e).lower():
             return {
                 "error": "OAuth token expired",
-                "message": "Your Basecamp OAuth token expired during the API call. Please re-authenticate by visiting http://localhost:8000 and completing the OAuth flow again."
+                "message": TOKEN_EXPIRED_MID_CALL
             }
         return {
             "error": "Execution error",
@@ -1236,7 +1259,7 @@ async def get_column(project_id: str, column_id: str) -> Dict[str, Any]:
         if "401" in str(e) and "expired" in str(e).lower():
             return {
                 "error": "OAuth token expired",
-                "message": "Your Basecamp OAuth token expired during the API call. Please re-authenticate by visiting http://localhost:8000 and completing the OAuth flow again."
+                "message": TOKEN_EXPIRED_MID_CALL
             }
         return {
             "error": "Execution error",
@@ -1268,7 +1291,7 @@ async def create_column(project_id: str, card_table_id: str, title: str) -> Dict
         if "401" in str(e) and "expired" in str(e).lower():
             return {
                 "error": "OAuth token expired",
-                "message": "Your Basecamp OAuth token expired during the API call. Please re-authenticate by visiting http://localhost:8000 and completing the OAuth flow again."
+                "message": TOKEN_EXPIRED_MID_CALL
             }
         return {
             "error": "Execution error",
@@ -1299,7 +1322,7 @@ async def move_card(project_id: str, card_id: str, column_id: str) -> Dict[str, 
         if "401" in str(e) and "expired" in str(e).lower():
             return {
                 "error": "OAuth token expired",
-                "message": "Your Basecamp OAuth token expired during the API call. Please re-authenticate by visiting http://localhost:8000 and completing the OAuth flow again."
+                "message": TOKEN_EXPIRED_MID_CALL
             }
         return {
             "error": "Execution error",
@@ -1329,7 +1352,7 @@ async def complete_card(project_id: str, card_id: str) -> Dict[str, Any]:
         if "401" in str(e) and "expired" in str(e).lower():
             return {
                 "error": "OAuth token expired",
-                "message": "Your Basecamp OAuth token expired during the API call. Please re-authenticate by visiting http://localhost:8000 and completing the OAuth flow again."
+                "message": TOKEN_EXPIRED_MID_CALL
             }
         return {
             "error": "Execution error",
@@ -1359,7 +1382,7 @@ async def get_card(project_id: str, card_id: str) -> Dict[str, Any]:
         if "401" in str(e) and "expired" in str(e).lower():
             return {
                 "error": "OAuth token expired", 
-                "message": "Your Basecamp OAuth token expired during the API call. Please re-authenticate by visiting http://localhost:8000 and completing the OAuth flow again."
+                "message": TOKEN_EXPIRED_MID_CALL
             }
         return {
             "error": "Execution error",
@@ -1394,7 +1417,7 @@ async def update_card(project_id: str, card_id: str, title: Optional[str] = None
         if "401" in str(e) and "expired" in str(e).lower():
             return {
                 "error": "OAuth token expired",
-                "message": "Your Basecamp OAuth token expired during the API call. Please re-authenticate by visiting http://localhost:8000 and completing the OAuth flow again."
+                "message": TOKEN_EXPIRED_MID_CALL
             }
         return {
             "error": "Execution error",
@@ -1427,7 +1450,7 @@ async def get_daily_check_ins(project_id: str, page: Optional[int] = None) -> Di
         if "401" in str(e) and "expired" in str(e).lower():
             return {
                 "error": "OAuth token expired",
-                "message": "Your Basecamp OAuth token expired during the API call. Please re-authenticate by visiting http://localhost:8000 and completing the OAuth flow again."
+                "message": TOKEN_EXPIRED_MID_CALL
             }
         return {
             "error": "Execution error",
@@ -1461,7 +1484,7 @@ async def get_question_answers(project_id: str, question_id: str, page: Optional
         if "401" in str(e) and "expired" in str(e).lower():
             return {
                 "error": "OAuth token expired",
-                "message": "Your Basecamp OAuth token expired during the API call. Please re-authenticate by visiting http://localhost:8000 and completing the OAuth flow again."
+                "message": TOKEN_EXPIRED_MID_CALL
             }
         return {
             "error": "Execution error",
@@ -1494,7 +1517,7 @@ async def update_column(project_id: str, column_id: str, title: str) -> Dict[str
         if "401" in str(e) and "expired" in str(e).lower():
             return {
                 "error": "OAuth token expired",
-                "message": "Your Basecamp OAuth token expired during the API call. Please re-authenticate by visiting http://localhost:8000 and completing the OAuth flow again."
+                "message": TOKEN_EXPIRED_MID_CALL
             }
         return {
             "error": "Execution error",
@@ -1526,7 +1549,7 @@ async def move_column(project_id: str, card_table_id: str, column_id: str, posit
         if "401" in str(e) and "expired" in str(e).lower():
             return {
                 "error": "OAuth token expired",
-                "message": "Your Basecamp OAuth token expired during the API call. Please re-authenticate by visiting http://localhost:8000 and completing the OAuth flow again."
+                "message": TOKEN_EXPIRED_MID_CALL
             }
         return {
             "error": "Execution error",
@@ -1558,7 +1581,7 @@ async def update_column_color(project_id: str, column_id: str, color: str) -> Di
         if "401" in str(e) and "expired" in str(e).lower():
             return {
                 "error": "OAuth token expired",
-                "message": "Your Basecamp OAuth token expired during the API call. Please re-authenticate by visiting http://localhost:8000 and completing the OAuth flow again."
+                "message": TOKEN_EXPIRED_MID_CALL
             }
         return {
             "error": "Execution error",
@@ -1588,7 +1611,7 @@ async def put_column_on_hold(project_id: str, column_id: str) -> Dict[str, Any]:
         if "401" in str(e) and "expired" in str(e).lower():
             return {
                 "error": "OAuth token expired",
-                "message": "Your Basecamp OAuth token expired during the API call. Please re-authenticate by visiting http://localhost:8000 and completing the OAuth flow again."
+                "message": TOKEN_EXPIRED_MID_CALL
             }
         return {
             "error": "Execution error",
@@ -1618,7 +1641,7 @@ async def remove_column_hold(project_id: str, column_id: str) -> Dict[str, Any]:
         if "401" in str(e) and "expired" in str(e).lower():
             return {
                 "error": "OAuth token expired",
-                "message": "Your Basecamp OAuth token expired during the API call. Please re-authenticate by visiting http://localhost:8000 and completing the OAuth flow again."
+                "message": TOKEN_EXPIRED_MID_CALL
             }
         return {
             "error": "Execution error",
@@ -1648,7 +1671,7 @@ async def watch_column(project_id: str, column_id: str) -> Dict[str, Any]:
         if "401" in str(e) and "expired" in str(e).lower():
             return {
                 "error": "OAuth token expired",
-                "message": "Your Basecamp OAuth token expired during the API call. Please re-authenticate by visiting http://localhost:8000 and completing the OAuth flow again."
+                "message": TOKEN_EXPIRED_MID_CALL
             }
         return {
             "error": "Execution error",
@@ -1678,7 +1701,7 @@ async def unwatch_column(project_id: str, column_id: str) -> Dict[str, Any]:
         if "401" in str(e) and "expired" in str(e).lower():
             return {
                 "error": "OAuth token expired",
-                "message": "Your Basecamp OAuth token expired during the API call. Please re-authenticate by visiting http://localhost:8000 and completing the OAuth flow again."
+                "message": TOKEN_EXPIRED_MID_CALL
             }
         return {
             "error": "Execution error",
@@ -1709,7 +1732,7 @@ async def uncomplete_card(project_id: str, card_id: str) -> Dict[str, Any]:
         if "401" in str(e) and "expired" in str(e).lower():
             return {
                 "error": "OAuth token expired",
-                "message": "Your Basecamp OAuth token expired during the API call. Please re-authenticate by visiting http://localhost:8000 and completing the OAuth flow again."
+                "message": TOKEN_EXPIRED_MID_CALL
             }
         return {
             "error": "Execution error",
@@ -1741,7 +1764,7 @@ async def get_card_steps(project_id: str, card_id: str) -> Dict[str, Any]:
         if "401" in str(e) and "expired" in str(e).lower():
             return {
                 "error": "OAuth token expired",
-                "message": "Your Basecamp OAuth token expired during the API call. Please re-authenticate by visiting http://localhost:8000 and completing the OAuth flow again."
+                "message": TOKEN_EXPIRED_MID_CALL
             }
         return {
             "error": "Execution error",
@@ -1775,7 +1798,7 @@ async def create_card_step(project_id: str, card_id: str, title: str, due_on: Op
         if "401" in str(e) and "expired" in str(e).lower():
             return {
                 "error": "OAuth token expired",
-                "message": "Your Basecamp OAuth token expired during the API call. Please re-authenticate by visiting http://localhost:8000 and completing the OAuth flow again."
+                "message": TOKEN_EXPIRED_MID_CALL
             }
         return {
             "error": "Execution error",
@@ -1805,7 +1828,7 @@ async def get_card_step(project_id: str, step_id: str) -> Dict[str, Any]:
         if "401" in str(e) and "expired" in str(e).lower():
             return {
                 "error": "OAuth token expired",
-                "message": "Your Basecamp OAuth token expired during the API call. Please re-authenticate by visiting http://localhost:8000 and completing the OAuth flow again."
+                "message": TOKEN_EXPIRED_MID_CALL
             }
         return {
             "error": "Execution error",
@@ -1839,7 +1862,7 @@ async def update_card_step(project_id: str, step_id: str, title: Optional[str] =
         if "401" in str(e) and "expired" in str(e).lower():
             return {
                 "error": "OAuth token expired",
-                "message": "Your Basecamp OAuth token expired during the API call. Please re-authenticate by visiting http://localhost:8000 and completing the OAuth flow again."
+                "message": TOKEN_EXPIRED_MID_CALL
             }
         return {
             "error": "Execution error",
@@ -1869,7 +1892,7 @@ async def delete_card_step(project_id: str, step_id: str) -> Dict[str, Any]:
         if "401" in str(e) and "expired" in str(e).lower():
             return {
                 "error": "OAuth token expired",
-                "message": "Your Basecamp OAuth token expired during the API call. Please re-authenticate by visiting http://localhost:8000 and completing the OAuth flow again."
+                "message": TOKEN_EXPIRED_MID_CALL
             }
         return {
             "error": "Execution error",
@@ -1899,7 +1922,7 @@ async def complete_card_step(project_id: str, step_id: str) -> Dict[str, Any]:
         if "401" in str(e) and "expired" in str(e).lower():
             return {
                 "error": "OAuth token expired",
-                "message": "Your Basecamp OAuth token expired during the API call. Please re-authenticate by visiting http://localhost:8000 and completing the OAuth flow again."
+                "message": TOKEN_EXPIRED_MID_CALL
             }
         return {
             "error": "Execution error",
@@ -1929,7 +1952,7 @@ async def uncomplete_card_step(project_id: str, step_id: str) -> Dict[str, Any]:
         if "401" in str(e) and "expired" in str(e).lower():
             return {
                 "error": "OAuth token expired",
-                "message": "Your Basecamp OAuth token expired during the API call. Please re-authenticate by visiting http://localhost:8000 and completing the OAuth flow again."
+                "message": TOKEN_EXPIRED_MID_CALL
             }
         return {
             "error": "Execution error",
@@ -1961,7 +1984,7 @@ async def create_attachment(file_path: str, name: str, content_type: Optional[st
         if "401" in str(e) and "expired" in str(e).lower():
             return {
                 "error": "OAuth token expired",
-                "message": "Your Basecamp OAuth token expired during the API call. Please re-authenticate by visiting http://localhost:8000 and completing the OAuth flow again."
+                "message": TOKEN_EXPIRED_MID_CALL
             }
         return {
             "error": "Execution error",
@@ -1992,7 +2015,7 @@ async def get_events(project_id: str, recording_id: str) -> Dict[str, Any]:
         if "401" in str(e) and "expired" in str(e).lower():
             return {
                 "error": "OAuth token expired",
-                "message": "Your Basecamp OAuth token expired during the API call. Please re-authenticate by visiting http://localhost:8000 and completing the OAuth flow again."
+                "message": TOKEN_EXPIRED_MID_CALL
             }
         return {
             "error": "Execution error",
@@ -2022,7 +2045,7 @@ async def get_webhooks(project_id: str) -> Dict[str, Any]:
         if "401" in str(e) and "expired" in str(e).lower():
             return {
                 "error": "OAuth token expired",
-                "message": "Your Basecamp OAuth token expired during the API call. Please re-authenticate by visiting http://localhost:8000 and completing the OAuth flow again."
+                "message": TOKEN_EXPIRED_MID_CALL
             }
         return {
             "error": "Execution error",
@@ -2053,7 +2076,7 @@ async def create_webhook(project_id: str, payload_url: str, types: Optional[List
         if "401" in str(e) and "expired" in str(e).lower():
             return {
                 "error": "OAuth token expired",
-                "message": "Your Basecamp OAuth token expired during the API call. Please re-authenticate by visiting http://localhost:8000 and completing the OAuth flow again."
+                "message": TOKEN_EXPIRED_MID_CALL
             }
         return {
             "error": "Execution error",
@@ -2083,7 +2106,7 @@ async def delete_webhook(project_id: str, webhook_id: str) -> Dict[str, Any]:
         if "401" in str(e) and "expired" in str(e).lower():
             return {
                 "error": "OAuth token expired",
-                "message": "Your Basecamp OAuth token expired during the API call. Please re-authenticate by visiting http://localhost:8000 and completing the OAuth flow again."
+                "message": TOKEN_EXPIRED_MID_CALL
             }
         return {
             "error": "Execution error",
@@ -2115,7 +2138,7 @@ async def get_documents(project_id: str, vault_id: str) -> Dict[str, Any]:
         if "401" in str(e) and "expired" in str(e).lower():
             return {
                 "error": "OAuth token expired",
-                "message": "Your Basecamp OAuth token expired during the API call. Please re-authenticate by visiting http://localhost:8000 and completing the OAuth flow again."
+                "message": TOKEN_EXPIRED_MID_CALL
             }
         return {
             "error": "Execution error",
@@ -2145,7 +2168,7 @@ async def get_document(project_id: str, document_id: str) -> Dict[str, Any]:
         if "401" in str(e) and "expired" in str(e).lower():
             return {
                 "error": "OAuth token expired",
-                "message": "Your Basecamp OAuth token expired during the API call. Please re-authenticate by visiting http://localhost:8000 and completing the OAuth flow again."
+                "message": TOKEN_EXPIRED_MID_CALL
             }
         return {
             "error": "Execution error",
@@ -2177,7 +2200,7 @@ async def create_document(project_id: str, vault_id: str, title: str, content: s
         if "401" in str(e) and "expired" in str(e).lower():
             return {
                 "error": "OAuth token expired",
-                "message": "Your Basecamp OAuth token expired during the API call. Please re-authenticate by visiting http://localhost:8000 and completing the OAuth flow again."
+                "message": TOKEN_EXPIRED_MID_CALL
             }
         return {
             "error": "Execution error",
@@ -2209,7 +2232,7 @@ async def update_document(project_id: str, document_id: str, title: Optional[str
         if "401" in str(e) and "expired" in str(e).lower():
             return {
                 "error": "OAuth token expired",
-                "message": "Your Basecamp OAuth token expired during the API call. Please re-authenticate by visiting http://localhost:8000 and completing the OAuth flow again."
+                "message": TOKEN_EXPIRED_MID_CALL
             }
         return {
             "error": "Execution error",
@@ -2239,7 +2262,7 @@ async def trash_document(project_id: str, document_id: str) -> Dict[str, Any]:
         if "401" in str(e) and "expired" in str(e).lower():
             return {
                 "error": "OAuth token expired",
-                "message": "Your Basecamp OAuth token expired during the API call. Please re-authenticate by visiting http://localhost:8000 and completing the OAuth flow again."
+                "message": TOKEN_EXPIRED_MID_CALL
             }
         return {
             "error": "Execution error",
@@ -2271,7 +2294,7 @@ async def get_uploads(project_id: str, vault_id: Optional[str] = None) -> Dict[s
         if "401" in str(e) and "expired" in str(e).lower():
             return {
                 "error": "OAuth token expired",
-                "message": "Your Basecamp OAuth token expired during the API call. Please re-authenticate by visiting http://localhost:8000 and completing the OAuth flow again."
+                "message": TOKEN_EXPIRED_MID_CALL
             }
         return {
             "error": "Execution error",
@@ -2301,7 +2324,7 @@ async def get_upload(project_id: str, upload_id: str) -> Dict[str, Any]:
         if "401" in str(e) and "expired" in str(e).lower():
             return {
                 "error": "OAuth token expired",
-                "message": "Your Basecamp OAuth token expired during the API call. Please re-authenticate by visiting http://localhost:8000 and completing the OAuth flow again."
+                "message": TOKEN_EXPIRED_MID_CALL
             }
         return {
             "error": "Execution error",
@@ -2326,7 +2349,7 @@ async def get_todolist(project_id: str, todolist_id: str) -> Dict[str, Any]:
     except Exception as e:
         logger.error(f"Error getting todolist {todolist_id}: {e}")
         if "401" in str(e) and "expired" in str(e).lower():
-            return {"error": "OAuth token expired", "message": "Your Basecamp OAuth token expired during the API call. Please re-authenticate by visiting http://localhost:8000 and completing the OAuth flow again."}
+            return {"error": "OAuth token expired", "message": TOKEN_EXPIRED_MID_CALL}
         return {"error": "Execution error", "message": str(e)}
 
 
@@ -2355,7 +2378,7 @@ async def create_todolist(
     except Exception as e:
         logger.error(f"Error creating todolist: {e}")
         if "401" in str(e) and "expired" in str(e).lower():
-            return {"error": "OAuth token expired", "message": "Your Basecamp OAuth token expired during the API call. Please re-authenticate by visiting http://localhost:8000 and completing the OAuth flow again."}
+            return {"error": "OAuth token expired", "message": TOKEN_EXPIRED_MID_CALL}
         return {"error": "Execution error", "message": str(e)}
 
 
@@ -2388,7 +2411,7 @@ async def update_todolist(
     except Exception as e:
         logger.error(f"Error updating todolist {todolist_id}: {e}")
         if "401" in str(e) and "expired" in str(e).lower():
-            return {"error": "OAuth token expired", "message": "Your Basecamp OAuth token expired during the API call. Please re-authenticate by visiting http://localhost:8000 and completing the OAuth flow again."}
+            return {"error": "OAuth token expired", "message": TOKEN_EXPIRED_MID_CALL}
         return {"error": "Execution error", "message": str(e)}
 
 
@@ -2412,7 +2435,7 @@ async def trash_todolist(project_id: str, todolist_id: str) -> Dict[str, Any]:
     except Exception as e:
         logger.error(f"Error trashing todolist {todolist_id}: {e}")
         if "401" in str(e) and "expired" in str(e).lower():
-            return {"error": "OAuth token expired", "message": "Your Basecamp OAuth token expired during the API call. Please re-authenticate by visiting http://localhost:8000 and completing the OAuth flow again."}
+            return {"error": "OAuth token expired", "message": TOKEN_EXPIRED_MID_CALL}
         return {"error": "Execution error", "message": str(e)}
 
 
@@ -2436,7 +2459,7 @@ async def get_todolist_groups(project_id: str, todolist_id: str) -> Dict[str, An
     except Exception as e:
         logger.error(f"Error getting todolist groups: {e}")
         if "401" in str(e) and "expired" in str(e).lower():
-            return {"error": "OAuth token expired", "message": "Your Basecamp OAuth token expired during the API call. Please re-authenticate by visiting http://localhost:8000 and completing the OAuth flow again."}
+            return {"error": "OAuth token expired", "message": TOKEN_EXPIRED_MID_CALL}
         return {"error": "Execution error", "message": str(e)}
 
 
@@ -2470,7 +2493,7 @@ async def create_todolist_group(
     except Exception as e:
         logger.error(f"Error creating todolist group: {e}")
         if "401" in str(e) and "expired" in str(e).lower():
-            return {"error": "OAuth token expired", "message": "Your Basecamp OAuth token expired during the API call. Please re-authenticate by visiting http://localhost:8000 and completing the OAuth flow again."}
+            return {"error": "OAuth token expired", "message": TOKEN_EXPIRED_MID_CALL}
         return {"error": "Execution error", "message": str(e)}
 
 
@@ -2500,7 +2523,7 @@ async def reposition_todolist_group(
     except Exception as e:
         logger.error(f"Error repositioning todolist group {group_id}: {e}")
         if "401" in str(e) and "expired" in str(e).lower():
-            return {"error": "OAuth token expired", "message": "Your Basecamp OAuth token expired during the API call. Please re-authenticate by visiting http://localhost:8000 and completing the OAuth flow again."}
+            return {"error": "OAuth token expired", "message": TOKEN_EXPIRED_MID_CALL}
         return {"error": "Execution error", "message": str(e)}
 
 

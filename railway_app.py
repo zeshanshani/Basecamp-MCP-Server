@@ -11,11 +11,14 @@ The Flask OAuth surface uses Flask sessions, hardened in oauth_app.py.
 
 import hmac
 import os
+from urllib.parse import urlparse
 
 from a2wsgi import WSGIMiddleware
 from starlette.applications import Starlette
 from starlette.responses import JSONResponse
 from starlette.routing import Mount
+
+from mcp.server.transport_security import TransportSecuritySettings
 
 from oauth_app import app as flask_oauth_app
 from basecamp_fastmcp import mcp
@@ -68,6 +71,24 @@ def require_bearer_token(asgi_app, expected_key):
 # FastMCP's Streamable HTTP route lives at this path on its own Starlette app.
 # Set to "/" because we mount the whole app at /mcp below.
 mcp.settings.streamable_http_path = "/"
+
+# MCP's transport security middleware validates the Host header against an
+# allow-list to defend against DNS rebinding. FastMCP only auto-allows
+# localhost, so we extend the list with the deployment's public host, derived
+# from BASECAMP_REDIRECT_URI to avoid a second env var.
+_public_host = urlparse(os.environ.get("BASECAMP_REDIRECT_URI", "")).hostname
+if _public_host:
+    _existing = mcp.settings.transport_security
+    _allowed_hosts = list(_existing.allowed_hosts) if _existing else []
+    _allowed_origins = list(_existing.allowed_origins) if _existing else []
+    _allowed_hosts.extend([_public_host, f"{_public_host}:*"])
+    _allowed_origins.append(f"https://{_public_host}")
+    mcp.settings.transport_security = TransportSecuritySettings(
+        enable_dns_rebinding_protection=True,
+        allowed_hosts=_allowed_hosts,
+        allowed_origins=_allowed_origins,
+    )
+
 mcp_app = mcp.streamable_http_app()
 protected_mcp_app = require_bearer_token(mcp_app, MCP_API_KEY)
 

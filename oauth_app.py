@@ -14,7 +14,8 @@ import json
 import hmac
 import secrets
 import logging
-from flask import Flask, request, redirect, url_for, session, render_template_string, jsonify, abort
+from functools import wraps
+from flask import Flask, request, redirect, url_for, session, render_template_string, jsonify, abort, Response
 from dotenv import load_dotenv
 from basecamp_oauth import BasecampOAuth
 from basecamp_client import BasecampClient
@@ -43,6 +44,7 @@ required_vars = [
     'USER_AGENT',
     'FLASK_SECRET_KEY',
     'MCP_API_KEY',
+    'ADMIN_PASSWORD',
 ]
 missing_vars = [var for var in required_vars if not os.getenv(var)]
 if missing_vars:
@@ -126,6 +128,40 @@ RESULTS_TEMPLATE = """
 def to_json(value, indent=None):
     return json.dumps(value, indent=indent)
 
+ADMIN_USERNAME = os.environ.get('ADMIN_USERNAME', 'admin')
+
+
+def require_admin_auth(view):
+    """
+    HTTP Basic Auth gate for browser-facing admin routes.
+
+    Used on the routes that expose or destroy token state (/, /logout,
+    /token/info). The OAuth callback at /auth/callback stays public because
+    Basecamp's redirect cannot send Authorization headers; that route has
+    its own state-parameter CSRF protection.
+    """
+
+    @wraps(view)
+    def wrapped(*args, **kwargs):
+        auth = request.authorization
+        expected_user = ADMIN_USERNAME
+        expected_pass = os.environ['ADMIN_PASSWORD']
+        unauthorized = Response(
+            'Authentication required',
+            status=401,
+            headers={'WWW-Authenticate': 'Basic realm="Basecamp MCP admin"'},
+        )
+        if not auth or not auth.username or not auth.password:
+            return unauthorized
+        if not (
+            hmac.compare_digest(auth.username, expected_user)
+            and hmac.compare_digest(auth.password, expected_pass)
+        ):
+            return unauthorized
+        return view(*args, **kwargs)
+
+    return wrapped
+
 def get_oauth_client():
     """Get a configured OAuth client."""
     try:
@@ -200,8 +236,9 @@ def ensure_valid_token():
     return token_data
 
 @app.route('/')
+@require_admin_auth
 def home():
-    """Home page."""
+    """Home page (admin: shows token status and the login-with-Basecamp button)."""
     # Ensure we have a valid token
     token_data = ensure_valid_token()
 
@@ -407,16 +444,18 @@ def get_token_api():
     })
 
 @app.route('/logout')
+@require_admin_auth
 def logout():
-    """Clear the session and token storage."""
+    """Clear the session and token storage (admin)."""
     logger.info("Logout called")
     session.clear()
     token_storage.clear_tokens()
     return redirect(url_for('home'))
 
 @app.route('/token/info')
+@require_admin_auth
 def token_info():
-    """Display information about the stored token."""
+    """Display information about the stored token (admin)."""
     logger.info("Token info called")
     token_data = token_storage.get_token()
 

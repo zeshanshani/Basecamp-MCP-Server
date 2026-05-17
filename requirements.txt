@@ -6,3 +6,6 @@ pytest==7.4.0
 mcp[cli]>=1.2.0
 httpx>=0.25.0
 anyio>=4.0.0
+uvicorn[standard]>=0.30
+starlette>=0.37
+a2wsgi>=1.10

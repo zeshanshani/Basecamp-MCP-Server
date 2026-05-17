@@ -1,106 +1,105 @@
 """
 Railway entry point.
 
-Mounts the existing Flask OAuth app at / and the FastMCP server (Streamable
-HTTP transport) at /mcp on the same ASGI server. Tokens are persisted to the
-mounted Railway Volume so OAuth refresh survives container restarts.
+Combines the Basecamp OAuth Flask app, the MCP-spec OAuth 2.1 authorisation
+server, and the FastMCP Streamable HTTP transport into a single ASGI
+process served by Uvicorn.
 
-The /mcp endpoint is protected by a bearer-token check against MCP_API_KEY.
-The Flask OAuth surface uses Flask sessions, hardened in oauth_app.py.
+Route ownership at the root:
+
+    /.well-known/oauth-authorization-server         MCP SDK (metadata)
+    /.well-known/oauth-protected-resource/mcp       MCP SDK (metadata)
+    /authorize, /token, /register                   MCP SDK (OAuth endpoints)
+    /mcp                                            FastMCP streamable HTTP
+                                                      (requires Bearer issued
+                                                      by /token)
+    everything else                                 Flask (Basecamp OAuth +
+                                                      admin UI + /oauth/consent)
+
+Basecamp's own OAuth tokens (used by the MCP tools to call Basecamp) are
+stored at $BASECAMP_MCP_TOKEN_FILE on the Railway volume. The MCP server's
+OAuth state (clients, codes, access/refresh tokens issued to Claude.ai)
+lives at $MCP_OAUTH_STATE_FILE, also on the volume.
 """
 
-import hmac
 import os
 from urllib.parse import urlparse
 
 from a2wsgi import WSGIMiddleware
+from pydantic import AnyHttpUrl
 from starlette.applications import Starlette
-from starlette.responses import JSONResponse
 from starlette.routing import Mount
 
+from mcp.server.auth.provider import ProviderTokenVerifier
+from mcp.server.auth.settings import AuthSettings, ClientRegistrationOptions, RevocationOptions
 from mcp.server.transport_security import TransportSecuritySettings
 
-from oauth_app import app as flask_oauth_app
+from oauth_app import app as flask_oauth_app, attach_mcp_oauth_provider
 from basecamp_fastmcp import mcp
+from mcp_oauth_provider import FileOAuthProvider
 
-MCP_API_KEY = os.environ.get("MCP_API_KEY")
-if not MCP_API_KEY:
+# ----- Derive public origin from BASECAMP_REDIRECT_URI ---------------------
+
+_redirect_uri = os.environ.get("BASECAMP_REDIRECT_URI", "")
+_parsed = urlparse(_redirect_uri)
+if not _parsed.scheme or not _parsed.netloc:
     raise RuntimeError(
-        "MCP_API_KEY environment variable is required. "
-        "Generate one with: openssl rand -hex 32"
+        "BASECAMP_REDIRECT_URI must be a fully-qualified URL "
+        "(e.g. https://<host>/auth/callback)."
     )
+_public_origin = f"{_parsed.scheme}://{_parsed.netloc}"
+_public_host = _parsed.hostname
 
+# ----- DNS rebinding protection -------------------------------------------
 
-def require_bearer_token(asgi_app, expected_key):
-    """
-    Raw ASGI middleware that requires `Authorization: Bearer <expected_key>`.
+_existing_security = mcp.settings.transport_security
+_allowed_hosts = list(_existing_security.allowed_hosts) if _existing_security else []
+_allowed_origins = list(_existing_security.allowed_origins) if _existing_security else []
+_allowed_hosts.extend([_public_host, f"{_public_host}:*"])
+_allowed_origins.append(_public_origin)
+mcp.settings.transport_security = TransportSecuritySettings(
+    enable_dns_rebinding_protection=True,
+    allowed_hosts=_allowed_hosts,
+    allowed_origins=_allowed_origins,
+)
 
-    Implemented at the ASGI layer rather than via Starlette's BaseHTTPMiddleware
-    so it does not buffer streaming responses (the MCP transport streams SSE).
-    """
+# ----- OAuth authorisation server -----------------------------------------
 
-    async def wrapper(scope, receive, send):
-        if scope["type"] != "http":
-            await asgi_app(scope, receive, send)
-            return
+_oauth_state_file = os.environ.get("MCP_OAUTH_STATE_FILE", "/data/mcp_oauth_state.json")
+oauth_provider = FileOAuthProvider(
+    state_file=_oauth_state_file,
+    consent_url_base=_public_origin,
+)
 
-        provided = None
-        for name, value in scope.get("headers", []):
-            if name == b"authorization":
-                provided = value.decode("latin-1", "replace")
-                break
+mcp._auth_server_provider = oauth_provider
+mcp._token_verifier = ProviderTokenVerifier(oauth_provider)
+mcp.settings.auth = AuthSettings(
+    issuer_url=AnyHttpUrl(_public_origin),
+    resource_server_url=AnyHttpUrl(f"{_public_origin}/mcp"),
+    required_scopes=None,
+    client_registration_options=ClientRegistrationOptions(enabled=True),
+    revocation_options=RevocationOptions(enabled=False),
+)
 
-        if provided:
-            scheme, _, token = provided.partition(" ")
-            if scheme.lower() == "bearer" and hmac.compare_digest(
-                token, expected_key
-            ):
-                await asgi_app(scope, receive, send)
-                return
+# Let Flask reach into the provider to complete the consent flow.
+attach_mcp_oauth_provider(oauth_provider)
 
-        response = JSONResponse(
-            {"error": "unauthorized", "message": "Valid bearer token required"},
-            status_code=401,
-            headers={"WWW-Authenticate": 'Bearer realm="mcp"'},
-        )
-        await response(scope, receive, send)
-
-    return wrapper
-
-
-# FastMCP's Streamable HTTP route lives at this path on its own Starlette app.
-# Set to "/" because we mount the whole app at /mcp below.
-mcp.settings.streamable_http_path = "/"
-
-# MCP's transport security middleware validates the Host header against an
-# allow-list to defend against DNS rebinding. FastMCP only auto-allows
-# localhost, so we extend the list with the deployment's public host, derived
-# from BASECAMP_REDIRECT_URI to avoid a second env var.
-_public_host = urlparse(os.environ.get("BASECAMP_REDIRECT_URI", "")).hostname
-if _public_host:
-    _existing = mcp.settings.transport_security
-    _allowed_hosts = list(_existing.allowed_hosts) if _existing else []
-    _allowed_origins = list(_existing.allowed_origins) if _existing else []
-    _allowed_hosts.extend([_public_host, f"{_public_host}:*"])
-    _allowed_origins.append(f"https://{_public_host}")
-    mcp.settings.transport_security = TransportSecuritySettings(
-        enable_dns_rebinding_protection=True,
-        allowed_hosts=_allowed_hosts,
-        allowed_origins=_allowed_origins,
-    )
+# ----- Build the combined ASGI app ----------------------------------------
 
 mcp_app = mcp.streamable_http_app()
-protected_mcp_app = require_bearer_token(mcp_app, MCP_API_KEY)
-
-# Wrap the Flask (WSGI) app so Starlette can mount it alongside the ASGI MCP app.
 oauth_asgi = WSGIMiddleware(flask_oauth_app)
 
-# The inner MCP app's lifespan must run so its session manager initialises.
+# The MCP SDK auth middleware (AuthenticationMiddleware + AuthContextMiddleware)
+# is registered on mcp_app at construction time; propagate it to the outer
+# app so /mcp continues to see request.user. The middleware is harmless on
+# Flask routes — Flask never reads request.user.
 app = Starlette(
     routes=[
-        Mount("/mcp", app=protected_mcp_app),
+        # Specific MCP/OAuth routes first so they win over the Flask catch-all.
+        *mcp_app.routes,
         Mount("/", app=oauth_asgi),
     ],
+    middleware=mcp_app.user_middleware,
     lifespan=mcp_app.router.lifespan_context,
 )
 

@@ -43,7 +43,6 @@ required_vars = [
     'BASECAMP_REDIRECT_URI',
     'USER_AGENT',
     'FLASK_SECRET_KEY',
-    'MCP_API_KEY',
     'ADMIN_PASSWORD',
 ]
 missing_vars = [var for var in required_vars if not os.getenv(var)]
@@ -129,6 +128,16 @@ def to_json(value, indent=None):
     return json.dumps(value, indent=indent)
 
 ADMIN_USERNAME = os.environ.get('ADMIN_USERNAME', 'admin')
+
+# Lazily attached by railway_app.py at startup, so the consent screen can
+# complete the MCP OAuth flow on the same JSON state file the provider uses.
+_mcp_oauth_provider = None
+
+
+def attach_mcp_oauth_provider(provider) -> None:
+    """Wire the OAuth provider into the Flask app for the consent screen."""
+    global _mcp_oauth_provider
+    _mcp_oauth_provider = provider
 
 
 def require_admin_auth(view):
@@ -406,43 +415,6 @@ def auth_callback():
             show_home=True
         )
 
-@app.route('/api/token', methods=['GET'])
-def get_token_api():
-    """
-    Secure API endpoint for the MCP server to get the token.
-    This should only be accessible by the MCP server.
-    """
-    logger.info(
-        "Token API called from %s (has_api_key=%s)",
-        request.remote_addr,
-        bool(request.headers.get('X-API-Key')),
-    )
-
-    # MCP_API_KEY is required at startup, so this is always set.
-    api_key = request.headers.get('X-API-Key') or ''
-    expected = os.environ['MCP_API_KEY']
-    if not hmac.compare_digest(api_key, expected):
-        logger.error("Token API: Invalid API key")
-        return jsonify({
-            "error": "Unauthorized",
-            "message": "Invalid or missing API key"
-        }), 401
-
-    # Use the ensure_valid_token function to get a fresh token
-    token_data = ensure_valid_token()
-    if not token_data or not token_data.get('access_token'):
-        logger.error("Token API: No valid token available")
-        return jsonify({
-            "error": "Not authenticated",
-            "message": "No valid token available"
-        }), 404
-
-    logger.info("Token API: Successfully returned token")
-    return jsonify({
-        "access_token": token_data['access_token'],
-        "account_id": token_data.get('account_id')
-    })
-
 @app.route('/logout')
 @require_admin_auth
 def logout():
@@ -499,6 +471,126 @@ def token_info():
         warning=warning_message,
         show_home=True
     )
+
+CONSENT_TEMPLATE = """
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Authorise MCP client</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 40px; max-width: 600px; }
+        h1 { color: #333; }
+        .meta { background: #f5f5f5; padding: 12px; border-radius: 6px;
+                font-family: monospace; font-size: 13px; }
+        form { display: inline; }
+        button { padding: 10px 20px; margin-right: 10px; border: none;
+                 border-radius: 5px; cursor: pointer; font-size: 14px; }
+        .approve { background: #4CAF50; color: white; }
+        .deny    { background: #ddd; color: #333; }
+    </style>
+</head>
+<body>
+    <h1>Authorise this MCP client?</h1>
+    <p>An OAuth client is asking to access the Basecamp MCP server on your behalf.</p>
+    <div class="meta">
+        client_id:    {{ client_id }}<br>
+        client_name:  {{ client_name }}<br>
+        redirect_uri: {{ redirect_uri }}<br>
+        scopes:       {{ scopes }}
+    </div>
+    <p>Only approve if you initiated this from Claude (or another MCP client you trust).</p>
+    <form method="POST" action="/oauth/consent/decide">
+        <input type="hidden" name="pending_id" value="{{ pending_id }}">
+        <input type="hidden" name="csrf" value="{{ csrf }}">
+        <button class="approve" name="decision" value="approve">Approve</button>
+        <button class="deny"    name="decision" value="deny">Deny</button>
+    </form>
+</body>
+</html>
+"""
+
+
+@app.route('/oauth/consent', methods=['GET'])
+@require_admin_auth
+def oauth_consent():
+    """Render the MCP OAuth consent screen for a pending authorisation."""
+    if _mcp_oauth_provider is None:
+        return Response('MCP OAuth provider not configured', status=500)
+
+    pending_id = request.args.get('pending_id', '')
+    if not pending_id:
+        return Response('Missing pending_id', status=400)
+
+    pending = _mcp_oauth_provider.get_pending(pending_id)
+    if pending is None:
+        return Response('Pending authorisation not found or expired', status=404)
+
+    # Look up the client metadata to display its name. We avoid running the
+    # async get_client() here by reading the JSON state directly.
+    client_info = _mcp_oauth_provider._read()['clients'].get(pending['client_id'], {})
+
+    csrf = secrets.token_urlsafe(16)
+    session['oauth_consent_csrf'] = csrf
+
+    return render_template_string(
+        CONSENT_TEMPLATE,
+        pending_id=pending_id,
+        client_id=pending['client_id'],
+        client_name=client_info.get('client_name') or '(unnamed)',
+        redirect_uri=pending['redirect_uri'],
+        scopes=' '.join(pending.get('scopes') or []) or '(none)',
+        csrf=csrf,
+    )
+
+
+@app.route('/oauth/consent/decide', methods=['POST'])
+@require_admin_auth
+def oauth_consent_decide():
+    """Handle approve/deny from the consent screen."""
+    if _mcp_oauth_provider is None:
+        return Response('MCP OAuth provider not configured', status=500)
+
+    pending_id = request.form.get('pending_id', '')
+    decision = request.form.get('decision', '')
+    csrf = request.form.get('csrf', '')
+    expected_csrf = session.pop('oauth_consent_csrf', None)
+    if not expected_csrf or not hmac.compare_digest(csrf, expected_csrf):
+        logger.warning("Consent decide: CSRF mismatch")
+        return Response('CSRF mismatch', status=400)
+    if not pending_id:
+        return Response('Missing pending_id', status=400)
+
+    if decision == 'deny':
+        pending = _mcp_oauth_provider.discard_pending(pending_id)
+        if pending is None:
+            return Response('Pending authorisation not found', status=404)
+        params = {'error': 'access_denied'}
+        if pending.get('state'):
+            params['state'] = pending['state']
+        target = pending['redirect_uri']
+        sep = '&' if ('?' in target) else '?'
+        return redirect(f"{target}{sep}{urlencode_form(params)}")
+
+    if decision != 'approve':
+        return Response('Invalid decision', status=400)
+
+    result = _mcp_oauth_provider.approve_pending(pending_id)
+    if result is None:
+        return Response('Pending authorisation not found or expired', status=404)
+    code, state, pending = result
+
+    params = {'code': code}
+    if state is not None:
+        params['state'] = state
+    target = pending['redirect_uri']
+    sep = '&' if ('?' in target) else '?'
+    return redirect(f"{target}{sep}{urlencode_form(params)}")
+
+
+def urlencode_form(params: dict) -> str:
+    from urllib.parse import urlencode
+    return urlencode({k: v for k, v in params.items() if v is not None})
+
 
 @app.route('/health')
 def health_check():
